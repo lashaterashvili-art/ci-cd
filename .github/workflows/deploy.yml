@@ -10,7 +10,7 @@ jobs:
 
     strategy:
       matrix:
-        environment: [prod]   # ready for more later
+        environment: [prod]
 
     steps:
     - name: Checkout
@@ -27,16 +27,18 @@ jobs:
       uses: aws-actions/amazon-ecr-login@v2
 
     - name: Build & Push Docker image
+      id: build-image
       env:
         ECR_REPO: ${{ secrets.ECR_REPOSITORY }}
+        REGION: ${{ secrets.AWS_REGION }}
       run: |
         IMAGE_TAG=${GITHUB_SHA::7}
         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-        IMAGE_URI=$ACCOUNT_ID.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/$ECR_REPO:$IMAGE_TAG
-
+        IMAGE_URI=$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$ECR_REPO:$IMAGE_TAG
+        
         docker build -t $IMAGE_URI .
         docker push $IMAGE_URI
-
+        
         echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
     - name: Create ECS cluster if not exists
@@ -46,70 +48,62 @@ jobs:
 
     - name: Register task definition
       run: |
-       cat > taskdef.json <<EOF
-       {
-      "family": "${{ secrets.ECS_TASK_FAMILY }}"
-      "networkMode": "awsvpc"
-      "requiresCompatibilities": ["FARGATE"]
-      "cpu": "256"
-      "memory": "512"
-      "executionRoleArn": "arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/${{ secrets.ECS_EXECUTION_ROLE }}"
-      "containerDefinitions": [
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        
+        cat > taskdef.json <<EOF
         {
-          "name": "${{ secrets.CONTAINER_NAME }}",
-          "image": "${{ env.IMAGE_URI }}",
-          "portMappings": [
+          "family": "${{ secrets.ECS_TASK_FAMILY }}",
+          "networkMode": "awsvpc",
+          "requiresCompatibilities": ["FARGATE"],
+          "cpu": "256",
+          "memory": "512",
+          "executionRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/${{ secrets.ECS_EXECUTION_ROLE }}",
+          "containerDefinitions": [
             {
-              "containerPort": 80,
-              "protocol": "tcp"
+              "name": "${{ secrets.CONTAINER_NAME }}",
+              "image": "${{ env.IMAGE_URI }}",
+              "essential": true,
+              "portMappings": [
+                {
+                  "containerPort": 80,
+                  "protocol": "tcp"
+                }
+              ]
             }
           ]
-          "essential": true
         }
-      ]
-    }
-    EOF
+        EOF
 
-    # Register new task definition
-    aws ecs register-task-definition --cli-input-json file://taskdef.json
+        # Register and capture the new ARN
+        TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://taskdef.json --query 'taskDefinition.taskDefinitionArn' --output text)
+        echo "TASK_ARN=$TASK_ARN" >> $GITHUB_ENV
 
-    # Get latest task definition ARN
-    TASK_ARN=$(aws ecs list-task-definitions \
-      --family-prefix ${{ secrets.ECS_TASK_FAMILY }} \
-      --sort DESC \
-      --max-items 1 \
-      --query 'taskDefinitionArns[0]' \
-      --output text)
+    - name: Create or Update ECS Service
+      run: |
+        CLUSTER=${{ secrets.ECS_CLUSTER }}
+        SERVICE=${{ secrets.ECS_SERVICE }}
 
-    echo "TASK_ARN=$TASK_ARN" >> $GITHUB_ENV
+        # Check if service exists
+        SERVICE_STATUS=$(aws ecs describe-services --cluster $CLUSTER --services $SERVICE \
+          --query "services[0].status" --output text 2>/dev/null)
 
-- name: Create or Update ECS Service
-  run: |
-    CLUSTER=${{ secrets.ECS_CLUSTER }}
-    SERVICE=${{ secrets.ECS_SERVICE }}
-
-    # Check if service exists
-    SERVICE_STATUS=$(aws ecs describe-services --cluster $CLUSTER --services $SERVICE \
-      --query "services[0].status" --output text 2>/dev/null)
-
-    if [ "$SERVICE_STATUS" == "ACTIVE" ]; then
-      echo "Service exists, updating..."
-      aws ecs update-service \
-        --cluster $CLUSTER \
-        --service $SERVICE \
-        --task-definition ${{ env.TASK_ARN }} \
-        --force-new-deployment
-    else
-      echo "Service does not exist, creating..."
-      aws ecs create-service \
-        --cluster $CLUSTER \
-        --service-name $SERVICE \
-        --task-definition ${{ env.TASK_ARN }} \
-        --desired-count 1 \
-        --launch-type FARGATE \
-        --network-configuration "awsvpcConfiguration={subnets=[subnet-0fdc05e397f84fbac,subnet-0df97fb0d70eb1bd4,subnet-02ac1484c20b0d1a2],securityGroups=[sg-0f3929f4b22121b24,sg-01143b7bc4fbdeec7],assignPublicIp=ENABLED}"
-    fi
-
+        if [ "$SERVICE_STATUS" == "ACTIVE" ]; then
+          echo "Service exists, updating..."
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service $SERVICE \
+            --task-definition ${{ env.TASK_ARN }} \
+            --force-new-deployment
+        else
+          echo "Service does not exist, creating..."
+          aws ecs create-service \
+            --cluster $CLUSTER \
+            --service-name $SERVICE \
+            --task-definition ${{ env.TASK_ARN }} \
+            --desired-count 1 \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[subnet-0fdc05e397f84fbac,subnet-0df97fb0d70eb1bd4,subnet-02ac1484c20b0d1a2],securityGroups=[sg-0f3929f4b22121b24,sg-01143b7bc4fbdeec7],assignPublicIp=ENABLED}"
+        fi
 
 
 
