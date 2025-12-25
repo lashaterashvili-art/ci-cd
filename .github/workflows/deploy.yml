@@ -91,6 +91,6 @@ jobs:
             --task-definition $TASK \
             --desired-count 1 \
             --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[subnet-xxxx],securityGroups=[sg-xxxx],assignPublicIp=ENABLED}"
+            --network-configuration "awsvpcConfiguration={subnets=[subnet-lasha-vpc-subnet-private1-eu-central-1a,subnet-lasha-vpc-subnet-private3-eu-central-1c,subnet-lasha-vpc-subnet-private2-eu-central-1b],securityGroups=[sg-0f3929f4b22121b24,sg-01143b7bc4fbdeec7],assignPublicIp=ENABLED}"
         fi
 
