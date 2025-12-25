@@ -71,26 +71,46 @@ jobs:
         EOF
 
         aws ecs register-task-definition --cli-input-json file://taskdef.json
-
     - name: Create or Update ECS Service
       run: |
         CLUSTER=${{ secrets.ECS_CLUSTER }}
         SERVICE=${{ secrets.ECS_SERVICE }}
-        TASK=${{ secrets.ECS_TASK_FAMILY }}
 
-        if aws ecs describe-services --cluster $CLUSTER --services $SERVICE | grep -q ACTIVE; then
+        # Get the latest task definition ARN
+        TASK_ARN=$(aws ecs describe-task-definition \
+          --task-definition ${{ secrets.ECS_TASK_FAMILY }} \
+          --query 'taskDefinition.taskDefinitionArn' \
+          --output text 2>/dev/null || echo "")
+
+        if [ -z "$TASK_ARN" ]; then
+          echo "No previous task definition found, using newly registered one"
+          TASK_ARN=$(aws ecs list-task-definitions \
+            --family-prefix ${{ secrets.ECS_TASK_FAMILY }} \
+            --sort DESC \
+            --max-items 1 \
+            --query 'taskDefinitionArns[0]' \
+            --output text)
+        fi
+
+        echo "Using task definition: $TASK_ARN"
+
+        # Check if service exists
+        if aws ecs describe-services --cluster $CLUSTER --services $SERVICE \
+            | grep -q ACTIVE; then
           aws ecs update-service \
             --cluster $CLUSTER \
             --service $SERVICE \
-            --task-definition $TASK \
+            --task-definition $TASK_ARN \
             --force-new-deployment
         else
           aws ecs create-service \
             --cluster $CLUSTER \
             --service-name $SERVICE \
-            --task-definition $TASK \
+            --task-definition $TASK_ARN \
             --desired-count 1 \
             --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[subnet-lasha-vpc-subnet-private1-eu-central-1a,subnet-lasha-vpc-subnet-private3-eu-central-1c,subnet-lasha-vpc-subnet-private2-eu-central-1b],securityGroups=[sg-0f3929f4b22121b24,sg-01143b7bc4fbdeec7],assignPublicIp=ENABLED}"
+            --network-configuration "awsvpcConfiguration={subnets=[subnet-xxxx],securityGroups=[sg-xxxx],assignPublicIp=ENABLED}"
         fi
+
+
 
