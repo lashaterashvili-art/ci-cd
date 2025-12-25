@@ -102,7 +102,8 @@ jobs:
             --task-definition ${{ env.TASK_ARN }} \
             --desired-count 1 \
             --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[subnet-0fdc05e397f84fbac,subnet-0df97fb0d70eb1bd4,subnet-02ac1484c20b0d1a2],securityGroups=[sg-0f3929f4b22121b24,sg-01143b7bc4fbdeec7],assignPublicIp=ENABLED}"
+            --load-balancers "targetGroupArn=arn:aws:elasticloadbalancing:eu-central-1:612293362657:targetgroup/80tg/5025cc400687e2e2,containerName=nginx,containerPort=80"
+            --network-configuration "awsvpcConfiguration={subnets=[subnet-0fdc05e397f84fbac,subnet-0df97fb0d70eb1bd4,subnet-02ac1484c20b0d1a2],securityGroups=[sg-0f3929f4b22121b24],assignPublicIp=ENABLED}"
         fi
 
 
