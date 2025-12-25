@@ -109,7 +109,7 @@ jobs:
             --task-definition $TASK_ARN \
             --desired-count 1 \
             --launch-type FARGATE \
-               --network-configuration "awsvpcConfiguration={subnets=[subnet-lasha-vpc-subnet-private1-eu-central-1a,subnet-lasha-vpc-subnet-private3-eu-central-1c,subnet-lasha-vpc-subnet-private2-eu-central-1b],securityGroups=[sg-0f3929f4b22121b24,sg-01143b7bc4fbdeec7],assignPublicIp=ENABLED}"
+               --network-configuration "awsvpcConfiguration={subnets=[subnet-subnet-0fdc05e397f84fbac,subnet-subnet-0df97fb0d70eb1bd4,subnet-subnet-02ac1484c20b0d1a2],securityGroups=[sg-0f3929f4b22121b24,sg-01143b7bc4fbdeec7],assignPublicIp=ENABLED}"
         fi
     
 
