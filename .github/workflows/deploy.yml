@@ -1,0 +1,96 @@
+name: Build & Deploy Nginx to ECS
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        environment: [prod]   # ready for more later
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build & Push Docker image
+      env:
+        ECR_REPO: ${{ secrets.ECR_REPOSITORY }}
+      run: |
+        IMAGE_TAG=${GITHUB_SHA::7}
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        IMAGE_URI=$ACCOUNT_ID.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/$ECR_REPO:$IMAGE_TAG
+
+        docker build -t $IMAGE_URI .
+        docker push $IMAGE_URI
+
+        echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+    - name: Create ECS cluster if not exists
+      run: |
+        aws ecs describe-clusters --clusters ${{ secrets.ECS_CLUSTER }} \
+        || aws ecs create-cluster --cluster-name ${{ secrets.ECS_CLUSTER }}
+
+    - name: Register task definition
+      run: |
+        cat > taskdef.json <<EOF
+        {
+          "family": "${{ secrets.ECS_TASK_FAMILY }}",
+          "networkMode": "awsvpc",
+          "requiresCompatibilities": ["FARGATE"],
+          "cpu": "256",
+          "memory": "512",
+          "executionRoleArn": "arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/${{ secrets.ECS_EXECUTION_ROLE }}",
+          "containerDefinitions": [
+            {
+              "name": "${{ secrets.CONTAINER_NAME }}",
+              "image": "${{ env.IMAGE_URI }}",
+              "portMappings": [
+                {
+                  "containerPort": 80,
+                  "protocol": "tcp"
+                }
+              ],
+              "essential": true
+            }
+          ]
+        }
+        EOF
+
+        aws ecs register-task-definition --cli-input-json file://taskdef.json
+
+    - name: Create or Update ECS Service
+      run: |
+        CLUSTER=${{ secrets.ECS_CLUSTER }}
+        SERVICE=${{ secrets.ECS_SERVICE }}
+        TASK=${{ secrets.ECS_TASK_FAMILY }}
+
+        if aws ecs describe-services --cluster $CLUSTER --services $SERVICE | grep -q ACTIVE; then
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service $SERVICE \
+            --task-definition $TASK \
+            --force-new-deployment
+        else
+          aws ecs create-service \
+            --cluster $CLUSTER \
+            --service-name $SERVICE \
+            --task-definition $TASK \
+            --desired-count 1 \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[subnet-xxxx],securityGroups=[sg-xxxx],assignPublicIp=ENABLED}"
+        fi
+
