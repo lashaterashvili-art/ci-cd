@@ -46,72 +46,70 @@ jobs:
 
     - name: Register task definition
       run: |
-        cat > taskdef.json <<EOF
+       cat > taskdef.json <<EOF
+       {
+      "family": "${{ secrets.ECS_TASK_FAMILY }}"
+      "networkMode": "awsvpc"
+      "requiresCompatibilities": ["FARGATE"]
+      "cpu": "256"
+      "memory": "512"
+      "executionRoleArn": "arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/${{ secrets.ECS_EXECUTION_ROLE }}"
+      "containerDefinitions": [
         {
-          "family": "${{ secrets.ECS_TASK_FAMILY }}",
-          "networkMode": "awsvpc",
-          "requiresCompatibilities": ["FARGATE"],
-          "cpu": "256",
-          "memory": "512",
-          "executionRoleArn": "arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/${{ secrets.ECS_EXECUTION_ROLE }}",
-          "containerDefinitions": [
+          "name": "${{ secrets.CONTAINER_NAME }}",
+          "image": "${{ env.IMAGE_URI }}",
+          "portMappings": [
             {
-              "name": "${{ secrets.CONTAINER_NAME }}",
-              "image": "${{ env.IMAGE_URI }}",
-              "portMappings": [
-                {
-                  "containerPort": 80,
-                  "protocol": "tcp"
-                }
-              ],
-              "essential": true
+              "containerPort": 80,
+              "protocol": "tcp"
             }
           ]
+          "essential": true
         }
-        EOF
+      ]
+    }
+    EOF
 
-        aws ecs register-task-definition --cli-input-json file://taskdef.json
-    - name: Create or Update ECS Service
-      run: |
-        CLUSTER=${{ secrets.ECS_CLUSTER }}
-        SERVICE=${{ secrets.ECS_SERVICE }}
+    # Register new task definition
+    aws ecs register-task-definition --cli-input-json file://taskdef.json
 
-        # Get the latest task definition ARN
-        TASK_ARN=$(aws ecs describe-task-definition \
-          --task-definition ${{ secrets.ECS_TASK_FAMILY }} \
-          --query 'taskDefinition.taskDefinitionArn' \
-          --output text 2>/dev/null || echo "")
+    # Get latest task definition ARN
+    TASK_ARN=$(aws ecs list-task-definitions \
+      --family-prefix ${{ secrets.ECS_TASK_FAMILY }} \
+      --sort DESC \
+      --max-items 1 \
+      --query 'taskDefinitionArns[0]' \
+      --output text)
 
-        if [ -z "$TASK_ARN" ]; then
-          echo "No previous task definition found, using newly registered one"
-          TASK_ARN=$(aws ecs list-task-definitions \
-            --family-prefix ${{ secrets.ECS_TASK_FAMILY }} \
-            --sort DESC \
-            --max-items 1 \
-            --query 'taskDefinitionArns[0]' \
-            --output text)
-        fi
+    echo "TASK_ARN=$TASK_ARN" >> $GITHUB_ENV
 
-        echo "Using task definition: $TASK_ARN"
+- name: Create or Update ECS Service
+  run: |
+    CLUSTER=${{ secrets.ECS_CLUSTER }}
+    SERVICE=${{ secrets.ECS_SERVICE }}
 
-        # Check if service exists
-        if aws ecs describe-services --cluster $CLUSTER --services $SERVICE \
-            | grep -q ACTIVE; then
-          aws ecs update-service \
-            --cluster $CLUSTER \
-            --service $SERVICE \
-            --task-definition $TASK_ARN \
-            --force-new-deployment
-        else
-          aws ecs create-service \
-            --cluster $CLUSTER \
-            --service-name $SERVICE \
-            --task-definition $TASK_ARN \
-            --desired-count 1 \
-            --launch-type FARGATE \
-               --network-configuration "awsvpcConfiguration={subnets=[subnet-subnet-0fdc05e397f84fbac,subnet-subnet-0df97fb0d70eb1bd4,subnet-subnet-02ac1484c20b0d1a2],securityGroups=[sg-0f3929f4b22121b24,sg-01143b7bc4fbdeec7],assignPublicIp=ENABLED}"
-        fi
-    
+    # Check if service exists
+    SERVICE_STATUS=$(aws ecs describe-services --cluster $CLUSTER --services $SERVICE \
+      --query "services[0].status" --output text 2>/dev/null)
+
+    if [ "$SERVICE_STATUS" == "ACTIVE" ]; then
+      echo "Service exists, updating..."
+      aws ecs update-service \
+        --cluster $CLUSTER \
+        --service $SERVICE \
+        --task-definition ${{ env.TASK_ARN }} \
+        --force-new-deployment
+    else
+      echo "Service does not exist, creating..."
+      aws ecs create-service \
+        --cluster $CLUSTER \
+        --service-name $SERVICE \
+        --task-definition ${{ env.TASK_ARN }} \
+        --desired-count 1 \
+        --launch-type FARGATE \
+        --network-configuration "awsvpcConfiguration={subnets=[subnet-0fdc05e397f84fbac,subnet-0df97fb0d70eb1bd4,subnet-02ac1484c20b0d1a2],securityGroups=[sg-0f3929f4b22121b24,sg-01143b7bc4fbdeec7],assignPublicIp=ENABLED}"
+    fi
+
 
 
 
